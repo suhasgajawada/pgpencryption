@@ -352,12 +352,11 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.pgpainless.PGPainless;
 import org.pgpainless.decryption_verification.DecryptionStream;
-import org.pgpainless.decryption_verification.OpenPgpMetadata;
-import org.pgpainless.key.collection.KeyRingUtils;
+import org.pgpainless.decryption_verification.MessageMetadata;
+import org.pgpainless.key.collection.PGPPublicKeyRingCollection;
+import org.pgpainless.key.collection.PGPSecretKeyRingCollection;
 import org.pgpainless.key.protection.SecretKeyRingProtector;
-import org.pgpainless.util.Passphrase;
-import org.bouncycastle.openpgp.PGPPublicKeyRing;
-import org.bouncycastle.openpgp.PGPSecretKeyRing;
+import org.pgpainless.key.protection.impl.UnprotectedKeysProtector;
 import org.springframework.stereotype.Service;
 
 import java.io.*;
@@ -378,36 +377,43 @@ public class PgpProcessorService {
         String passphrase = vaultKeyLoader.getOurPassphrase();
         String publicKey = vaultKeyLoader.getTheirPublicKey();
 
-        // Load single key rings (Java 8 + PGPainless 1.5.5)
-        PGPSecretKeyRing secretKey = PGPainless.readKeyRing().secretKeyRing(new ByteArrayInputStream(privateKey.getBytes("UTF-8")));
-        PGPPublicKeyRing publicKeyRing = PGPainless.readKeyRing().publicKeyRing(new ByteArrayInputStream(publicKey.getBytes("UTF-8")));
-        SecretKeyRingProtector protector = SecretKeyRingProtector.unlockAllKeysWith(Passphrase.fromPassword(passphrase));
+        // Load keyrings as collections
+        PGPSecretKeyRingCollection secretKeys = PGPainless.readKeyRing()
+                .secretKeyRingCollection(new ByteArrayInputStream(privateKey.getBytes("UTF-8")));
+
+        PGPPublicKeyRingCollection publicKeys = PGPainless.readKeyRing()
+                .publicKeyRingCollection(new ByteArrayInputStream(publicKey.getBytes("UTF-8")));
+
+        // Create a simple (unprotected) key protector
+        SecretKeyRingProtector protector = new UnprotectedKeysProtector();
 
         try (
                 InputStream inputStream = new BufferedInputStream(new FileInputStream(inputFile));
                 OutputStream outputStream = new BufferedOutputStream(new FileOutputStream(outputFile))
         ) {
+            // Build decryption stream
             DecryptionStream decryptionStream = PGPainless.decryptAndOrVerify()
                     .onInputStream(inputStream)
-                    .decryptWith(protector, secretKey)
-                    .verifyWith(publicKeyRing)
+                    .decryptWith(protector, secretKeys)
+                    .verifyWith(publicKeys)
                     .build();
 
-            // Pipe output
+            // Pipe decrypted content to output stream
             byte[] buffer = new byte[8192];
             int len;
             while ((len = decryptionStream.read(buffer)) != -1) {
                 outputStream.write(buffer, 0, len);
             }
 
-            // Check verification result
-            OpenPgpMetadata metadata = decryptionStream.getMetadata();
+            decryptionStream.close();
+
+            // Verify signature
+            MessageMetadata metadata = decryptionStream.getMetadata();
             if (!metadata.isVerifiedSignature()) {
                 throw new SecurityException("PGP Signature verification failed.");
             }
 
-            logger.info("Signature verified. File decrypted successfully.");
-            decryptionStream.close();
+            logger.info("File decrypted and signature verified successfully.");
         }
     }
 }
