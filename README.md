@@ -1,163 +1,177 @@
-Below is a **fully runnable Spring Boot 2 (Java 8)** project skeleton that satisfies every constraint you listed:
+Below is a complete, compile-ready Spring Boot 2 .x application (Java 8) that:
 
-* **pulls a `.pgp` file from an SFTP drop**
-* **verifies Org A’s signature** with their public key
-* **decrypts** with your private key + passphrase
-* loads all keys / secrets from **HashiCorp Vault** (KV-v2) – no file-system copies
-* uses **PGPainless + Bouncy Castle** for pure-Java OpenPGP
-* contains an **IntegrationFlow** so you can just start the app and watch decrypted files land in `/opt/pgp-out/`
+1. Polls an SFTP server for new files
+2. Verifies the PGP signature (Org A’s public key)
+3. Decrypts with your private key
+4. Loads all PGP keys + passphrase from HashiCorp Vault via Spring Cloud Vault
+5. Drops the decrypted output to a local directory
+
+You can copy-paste this into IntelliJ IDEA Ultimate, adjust your Vault/SFTP details, and run.
 
 ---
 
-## 1 · `pom.xml`
+## 1. `pom.xml`
 
 ```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+<project xmlns="http://maven.apache.org/POM/4.0.0"    
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"    
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0    
                              http://maven.apache.org/xsd/maven-4.0.0.xsd">
-    <modelVersion>4.0.0</modelVersion>
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>2.7.12</version>
+  </parent>
 
-    <groupId>com.yourbank</groupId>
-    <artifactId>pgp-file-processor</artifactId>
-    <version>1.0.0</version>
-    <properties>
-        <!-- Java 8 + latest Spring Boot 2.x line (2.7.x still Java-8 compatible) -->
-        <java.version>1.8</java.version>
-        <spring-boot.version>2.7.18</spring-boot.version>
-        <spring-cloud.version>2021.0.9</spring-cloud.version>
-        <pgpainless.version>1.7.5</pgpainless.version>   <!-- works on Java 8 -->
-        <bouncycastle.version>1.78</bouncycastle.version>
-    </properties>
+  <groupId>com.yourorg</groupId>
+  <artifactId>pgp-file-processor</artifactId>
+  <version>0.0.1-SNAPSHOT</version>
 
-    <dependencyManagement>
-        <dependencies>
-            <dependency>
-                <groupId>org.springframework.cloud</groupId>
-                <artifactId>spring-cloud-dependencies</artifactId>
-                <version>${spring-cloud.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-        </dependencies>
-    </dependencyManagement>
+  <properties>
+    <java.version>1.8</java.version>
+    <pgpainless.version>1.7.5</pgpainless.version>
+    <jsch.version>0.1.55</jsch.version>
+    <bcprov.version>1.78</bcprov.version>
+    <spring-cloud.version>2021.0.7</spring-cloud.version>
+  </properties>
 
+  <dependencyManagement>
     <dependencies>
-        <!-- Spring core -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter</artifactId>
-        </dependency>
-        <!-- SFTP via Spring-Integration -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-integration</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.integration</groupId>
-            <artifactId>spring-integration-sftp</artifactId>
-        </dependency>
-        <!-- Vault -->
-        <dependency>
-            <groupId>org.springframework.cloud</groupId>
-            <artifactId>spring-cloud-starter-vault-config</artifactId>
-        </dependency>
-        <!-- PGP -->
-        <dependency>
-            <groupId>org.pgpainless</groupId>
-            <artifactId>pgpainless-core</artifactId>
-            <version>${pgpainless.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.bouncycastle</groupId>
-            <artifactId>bcprov-jdk15on</artifactId>
-            <version>${bouncycastle.version}</version>
-        </dependency>
-        <!-- Lombok (optional) -->
-        <dependency>
-            <groupId>org.projectlombok</groupId>
-            <artifactId>lombok</artifactId>
-            <optional>true</optional>
-        </dependency>
-        <!-- Tests -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-test</artifactId>
-            <scope>test</scope>
-        </dependency>
+      <dependency>
+        <groupId>org.springframework.cloud</groupId>
+        <artifactId>spring-cloud-dependencies</artifactId>
+        <version>${spring-cloud.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
     </dependencies>
+  </dependencyManagement>
 
-    <build>
-        <plugins>
-            <plugin>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-maven-plugin</artifactId>
-            </plugin>
-        </plugins>
-    </build>
+  <dependencies>
+    <!-- Spring Boot + scheduling -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-scheduling</artifactId>
+    </dependency>
+
+    <!-- Vault config -->
+    <dependency>
+      <groupId>org.springframework.cloud</groupId>
+      <artifactId>spring-cloud-starter-vault-config</artifactId>
+    </dependency>
+
+    <!-- SFTP via JSch -->
+    <dependency>
+      <groupId>com.jcraft</groupId>
+      <artifactId>jsch</artifactId>
+      <version>${jsch.version}</version>
+    </dependency>
+
+    <!-- PGPainless + BouncyCastle -->
+    <dependency>
+      <groupId>org.pgpainless</groupId>
+      <artifactId>pgpainless-core</artifactId>
+      <version>${pgpainless.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.bouncycastle</groupId>
+      <artifactId>bcprov-jdk18on</artifactId>
+      <version>${bcprov.version}</version>
+    </dependency>
+
+    <!-- Lombok -->
+    <dependency>
+      <groupId>org.projectlombok</groupId>
+      <artifactId>lombok</artifactId>
+      <optional>true</optional>
+    </dependency>
+
+    <!-- Test -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+          <source>${java.version}</source>
+          <target>${java.version}</target>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+      </plugin>
+    </plugins>
+  </build>
 </project>
 ```
 
 ---
 
-## 2 · `application.yml`
+## 2. `src/main/resources/application.yml`
 
 ```yaml
 spring:
-  main:
-    banner-mode: "off"
-
+  application:
+    name: pgp-file-processor
   cloud:
     vault:
-      uri: https://vault.mybank.net          # ← your Vault URL
-      token: ${VAULT_TOKEN}                 # ← pass via env var in prod
+      scheme: http
+      host: localhost
+      port: 8200
+      authentication: TOKEN
+      token: ${VAULT_TOKEN}          # provide via env var or container secret
       kv:
+        enabled: true
         backend: secret
-        default-context: pgp-processor      # vault path: secret/data/pgp-processor
-
-integration:
-  sftp:
-    host: sftp.example.com
-    port: 22
-    user: sftp_user
-    password: ${SFTP_PW}
-    remote-dir: /incoming
-    file-mask: "*.pgp"
-    poll-rate-ms: 60000                    # every 60 s
+        default-context: application
+        profile-separator: '-'
 
 pgp:
-  out-dir: /opt/pgp-out                    # decrypted files land here
+  private-key: ${pgp.private-key}          # loaded from Vault at path secret/data/application
+  private-key-pass: ${pgp.private-key-pass}
+  their-public-key: ${pgp.their-public-key}
+
+sftp:
+  host: ${sftp.host}
+  port: ${sftp.port:22}
+  username: ${sftp.username}
+  password: ${sftp.password}
+  remote-dir: ${sftp.remote-dir:/upload}
+  local-download-dir: ${sftp.local-download-dir:/tmp/downloads}
+  poll-interval-ms: 60000
 ```
 
-> **💡 Add in Vault KV v2 path `secret/pgp-processor`:**
->
-> ```
-> {
->   "ourPrivateKey": "-----BEGIN PGP PRIVATE KEY BLOCK-----\n...",
->   "ourPassphrase": "********",
->   "theirPublicKey": "-----BEGIN PGP PUBLIC KEY BLOCK-----\n..."
-> }
-> ```
+> **Vault setup**:
+> Store at `secret/data/application` keys `pgp.private-key`, `pgp.private-key-pass`, `pgp.their-public-key`, plus `sftp.host`, `sftp.username`, `sftp.password`, etc.
 
 ---
 
-## 3 · Main class `PgpFileProcessorApplication`
+## 3. Main Application
 
 ```java
-package com.yourbank.pgpfileprocessor;
+// src/main/java/com/yourorg/pgpfileprocessor/PgpFileProcessorApplication.java
+package com.yourorg.pgpfileprocessor;
 
-import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-
-import java.security.Security;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 @SpringBootApplication
+@EnableScheduling
 public class PgpFileProcessorApplication {
-
     public static void main(String[] args) {
-        Security.addProvider(new BouncyCastleProvider());  // register BC once
         SpringApplication.run(PgpFileProcessorApplication.class, args);
     }
 }
@@ -165,302 +179,346 @@ public class PgpFileProcessorApplication {
 
 ---
 
-## 4 · Vault-backed Key config
+## 4. Configuration Properties
 
 ```java
-package com.yourbank.pgpfileprocessor.config;
+// src/main/java/com/yourorg/pgpfileprocessor/config/PgpProperties.java
+package com.yourorg.pgpfileprocessor.config;
 
-import lombok.Getter;
+import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.context.annotation.Configuration;
+import org.springframework.stereotype.Component;
 
-@Configuration
-@ConfigurationProperties(prefix = "pgp.keys")   // not used – values come from Vault
-@Getter
-public class PgpKeyProperties {
-
-    /**
-     * Injected automatically by Spring Cloud Vault from
-     * secret/pgp-processor keys `ourPrivateKey`, `ourPassphrase`, `theirPublicKey`
-     */
-    private String ourPrivateKey;
-    private String ourPassphrase;
+@Data
+@Component
+@ConfigurationProperties(prefix = "pgp")
+public class PgpProperties {
+    private String privateKey;
+    private String privateKeyPass;
     private String theirPublicKey;
+}
+```
 
-    public void setOurPrivateKey(String k)     { this.ourPrivateKey = k; }
-    public void setOurPassphrase(String p)     { this.ourPassphrase = p; }
-    public void setTheirPublicKey(String k)    { this.theirPublicKey  = k; }
+```java
+// src/main/java/com/yourorg/pgpfileprocessor/config/SftpProperties.java
+package com.yourorg.pgpfileprocessor.config;
+
+import lombok.Data;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.stereotype.Component;
+
+@Data
+@Component
+@ConfigurationProperties(prefix = "sftp")
+public class SftpProperties {
+    private String host;
+    private int port = 22;
+    private String username;
+    private String password;
+    private String remoteDir;
+    private String localDownloadDir;
+    private long pollIntervalMs;
 }
 ```
 
 ---
 
-## 5 · `KeyRingService`
+## 5. KeyRingService
 
 ```java
-package com.yourbank.pgpfileprocessor.service;
-
-import com.yourbank.pgpfileprocessor.config.PgpKeyProperties;
-import lombok.SneakyThrows;
-import org.pgpainless.PGPainless;
-import org.pgpainless.key.collection.PGPKeyRingCollection;
-import org.pgpainless.key.protection.SecretKeyRingProtector;
-import org.pgpainless.key.protection.passphrase.PasswordBasedSecretKeyRingProtector;
-import org.springframework.stereotype.Service;
+// src/main/java/com/yourorg/pgpfileprocessor/service/KeyRingService.java
+package com.yourorg.pgpfileprocessor.service;
 
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+
+import org.bouncycastle.openpgp.PGPException;
+import org.bouncycastle.openpgp.PGPSecretKeyRingCollection;
+import org.bouncycastle.openpgp.PGPPublicKeyRingCollection;
+import org.pgpainless.PGPainless;
+import org.pgpainless.key.protection.PasswordBasedSecretKeyRingProtector;
+import org.pgpainless.key.protection.SecretKeyRingProtector;
+import org.springframework.stereotype.Service;
+
+import com.yourorg.pgpfileprocessor.config.PgpProperties;
 
 @Service
 public class KeyRingService {
 
-    private final PGPKeyRingCollection secretRing;
-    private final PGPKeyRingCollection publicRing;
-    private final char[] passphrase;
+    private final PGPSecretKeyRingCollection secretKeyRingCollection;
+    private final PGPPublicKeyRingCollection publicKeyRingCollection;
+    private final SecretKeyRingProtector keyRingProtector;
 
-    @SneakyThrows
-    public KeyRingService(PgpKeyProperties props) {
-        this.secretRing = PGPainless.readKeyRing()
-                .secretKeyRingCollection(
-                        new ByteArrayInputStream(props.getOurPrivateKey()
-                                .getBytes(StandardCharsets.UTF_8)));
+    public KeyRingService(PgpProperties props) {
+        try (ByteArrayInputStream secIn = new ByteArrayInputStream(
+                    props.getPrivateKey().getBytes(StandardCharsets.UTF_8));
+             ByteArrayInputStream pubIn = new ByteArrayInputStream(
+                    props.getTheirPublicKey().getBytes(StandardCharsets.UTF_8))) {
 
-        this.publicRing = PGPainless.readKeyRing()
-                .publicKeyRingCollection(
-                        new ByteArrayInputStream(props.getTheirPublicKey()
-                                .getBytes(StandardCharsets.UTF_8)));
+            this.secretKeyRingCollection =
+                PGPainless.readKeyRing().secretKeyRingCollection(secIn);
 
-        this.passphrase = props.getOurPassphrase().toCharArray();
+            this.publicKeyRingCollection =
+                PGPainless.readKeyRing().publicKeyRingCollection(pubIn);
+
+            this.keyRingProtector =
+                new PasswordBasedSecretKeyRingProtector(
+                    props.getPrivateKeyPass().toCharArray());
+
+        } catch (IOException | PGPException e) {
+            throw new RuntimeException("Failed to load PGP key rings", e);
+        }
     }
 
-    public PGPKeyRingCollection secret()  { return secretRing; }
-    public PGPKeyRingCollection their()   { return publicRing; }
+    public PGPSecretKeyRingCollection getSecretKeyRingCollection() {
+        return secretKeyRingCollection;
+    }
 
-    public SecretKeyRingProtector protector() {
-        return new PasswordBasedSecretKeyRingProtector(passphrase);
+    public PGPPublicKeyRingCollection getPublicKeyRingCollection() {
+        return publicKeyRingCollection;
+    }
+
+    public SecretKeyRingProtector getKeyRingProtector() {
+        return keyRingProtector;
     }
 }
 ```
 
 ---
 
-## 6 · `PgpFileProcessorService`
+## 6. PgpFileProcessorService
 
 ```java
-package com.yourbank.pgpfileprocessor.service;
+// src/main/java/com/yourorg/pgpfileprocessor/service/PgpFileProcessorService.java
+package com.yourorg.pgpfileprocessor.service;
 
-import lombok.RequiredArgsConstructor;
-import lombok.SneakyThrows;
-import lombok.extern.slf4j.Slf4j;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.function.Consumer;
+
 import org.pgpainless.PGPainless;
 import org.pgpainless.decryption_verification.ConsumerOptions;
 import org.pgpainless.decryption_verification.Verification;
 import org.springframework.stereotype.Service;
 
-import java.io.*;
+import com.yourorg.pgpfileprocessor.service.KeyRingService;
 
 @Service
-@RequiredArgsConstructor
-@Slf4j
 public class PgpFileProcessorService {
 
-    private final KeyRingService keyRing;
+    private final KeyRingService keyRingService;
+
+    public PgpFileProcessorService(KeyRingService keyRingService) {
+        this.keyRingService = keyRingService;
+    }
 
     /**
-     * Decrypt & verify; write plaintext to dest.
+     * Decrypts and verifies the given PGP-encrypted+signed stream.
+     * @throws SecurityException if signature verification fails
      */
-    @SneakyThrows
-    public void process(InputStream encrypted, OutputStream dest) {
+    public byte[] decryptAndVerify(InputStream encrypted) throws IOException {
+        ByteArrayOutputStream plainOut = new ByteArrayOutputStream();
 
-        ConsumerOptions opts = new ConsumerOptions()
-                .addDecryptionKeys(keyRing.protector(), keyRing.secret())
-                .addVerificationCerts(keyRing.their());
+        // fail-fast on bad signature
+        Consumer<Verification> verificationConsumer = v -> {
+            if (!v.isVerified()) {
+                throw new SecurityException("PGP signature verification failed");
+            }
+        };
+
+        ConsumerOptions options = ConsumerOptions.decryptAndVerify()
+            .addDecryptionKeys(
+                keyRingService.getKeyRingProtector(),
+                keyRingService.getSecretKeyRingCollection())
+            .addVerificationCerts(keyRingService.getPublicKeyRingCollection())
+            .setVerificationConsumer(verificationConsumer);
 
         PGPainless.decryptAndOrVerify()
-                .onInputStream(encrypted)
-                .withOptions(opts.setVerificationConsumer(this::verify))
-                .decryptAndOrVerifyTo(dest);
-    }
+            .onInputStream(encrypted)
+            .withOptions(options)
+            .decryptAndOrVerifyTo(plainOut);
 
-    private void verify(Verification v) {
-        if (!v.isVerified()) {
-            throw new SecurityException("PGP signature verification failed!");
-        }
-        log.info("Signature verified for key 0x{}", Long.toHexString(v.getSigner()));
+        return plainOut.toByteArray();
     }
 }
 ```
 
 ---
 
-## 7 · SFTP Integration (`SftpConfig`)
+## 7. SftpService
 
 ```java
-package com.yourbank.pgpfileprocessor.config;
+// src/main/java/com/yourorg/pgpfileprocessor/service/SftpService.java
+package com.yourorg.pgpfileprocessor.service;
 
-import com.yourbank.pgpfileprocessor.service.PgpFileProcessorService;
-import lombok.RequiredArgsConstructor;
-import org.apache.commons.io.FilenameUtils;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.integration.annotation.ServiceActivator;
-import org.springframework.integration.channel.DirectChannel;
-import org.springframework.integration.config.EnableIntegration;
-import org.springframework.integration.dsl.IntegrationFlows;
-import org.springframework.integration.file.FileHeaders;
-import org.springframework.integration.file.FileWritingMessageHandler;
-import org.springframework.integration.file.remote.session.DefaultSftpSessionFactory;
-import org.springframework.integration.sftp.inbound.SftpInboundFileSynchronizer;
-import org.springframework.integration.sftp.inbound.SftpInboundFileSynchronizingMessageSource;
-import org.springframework.integration.sftp.session.SftpSessionFactory;
-import org.springframework.messaging.MessageChannel;
-import org.springframework.messaging.MessageHandler;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.util.List;
+import java.util.stream.Collectors;
+import java.util.Vector;
 
-import java.io.File;
-import java.io.FileInputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import com.jcraft.jsch.Channel;
+import com.jcraft.jsch.ChannelSftp;
+import com.jcraft.jsch.JSch;
+import com.jcraft.jsch.Session;
+import org.springframework.stereotype.Service;
 
-@Configuration
-@EnableIntegration
-@RequiredArgsConstructor
-public class SftpConfig {
+import com.yourorg.pgpfileprocessor.config.SftpProperties;
 
-    private final PgpFileProcessorService processor;
+@Service
+public class SftpService {
 
-    @Value("${integration.sftp.host}")        private String host;
-    @Value("${integration.sftp.port}")        private int port;
-    @Value("${integration.sftp.user}")        private String user;
-    @Value("${integration.sftp.password}")    private String password;
-    @Value("${integration.sftp.remote-dir}")  private String remoteDir;
-    @Value("${integration.sftp.file-mask}")   private String fileMask;
-    @Value("${integration.sftp.poll-rate-ms}")private long pollRate;
-    @Value("${pgp.out-dir}")                  private File outDir;
+    private final SftpProperties props;
 
-    // 1. SFTP session factory
-    @Bean
-    public SftpSessionFactory sftpSessionFactory() {
-        DefaultSftpSessionFactory sf = new DefaultSftpSessionFactory(true);
-        sf.setHost(host);
-        sf.setPort(port);
-        sf.setUser(user);
-        sf.setPassword(password);
-        sf.setAllowUnknownKeys(true);   // in prod pin the host key!
-        return sf;
+    public SftpService(SftpProperties props) {
+        this.props = props;
     }
 
-    // 2. Inbound synchronizer
-    @Bean
-    public SftpInboundFileSynchronizer fileSynchronizer() {
-        SftpInboundFileSynchronizer s = new SftpInboundFileSynchronizer(sftpSessionFactory());
-        s.setDeleteRemoteFiles(false);
-        s.setRemoteDirectory(remoteDir);
-        s.setFilter(new org.springframework.integration.file.filters.SftpSimplePatternFileListFilter(fileMask));
-        return s;
+    private ChannelSftp connect() throws Exception {
+        JSch jsch = new JSch();
+        Session session = jsch.getSession(props.getUsername(), props.getHost(), props.getPort());
+        session.setPassword(props.getPassword());
+        session.setConfig("StrictHostKeyChecking", "no");
+        session.connect();
+        Channel channel = session.openChannel("sftp");
+        channel.connect();
+        return (ChannelSftp) channel;
     }
 
-    // 3. Message source polling new files
-    @Bean
-    public SftpInboundFileSynchronizingMessageSource messageSource() {
-        SftpInboundFileSynchronizingMessageSource ms =
-                new SftpInboundFileSynchronizingMessageSource(fileSynchronizer());
-        ms.setLocalDirectory(new File("/tmp/pgp-staging"));
-        ms.setAutoCreateLocalDirectory(true);
-        ms.setMaxFetchSize(1);
-        ms.setBeanName("sftpInboundSource");
-        return ms;
+    public List<String> listFiles() throws Exception {
+        ChannelSftp sftp = connect();
+        Vector<ChannelSftp.LsEntry> entries = sftp.ls(props.getRemoteDir());
+        List<String> names = entries.stream()
+            .map(ChannelSftp.LsEntry::getFilename)
+            .filter(n -> !n.equals(".") && !n.equals(".."))
+            .collect(Collectors.toList());
+        sftp.exit();
+        return names;
     }
 
-    // 4. Channel for raw PGP files
-    @Bean
-    public MessageChannel pgpInboundChannel() {
-        return new DirectChannel();
-    }
-
-    // 5. Integration flow: poll → process → write decrypted
-    @Bean
-    public IntegrationFlow sftpFlow() {
-        return IntegrationFlows
-                .from(messageSource(),
-                      c -> c.poller(p -> p.fixedDelay(pollRate)))
-                .channel(pgpInboundChannel())
-                .handle(message -> {
-                    File pgpFile = (File) message.getPayload();
-                    String base = FilenameUtils.getBaseName(pgpFile.getName());
-                    Path destFile = outDir.toPath().resolve(base + ".dec");
-                    Files.createDirectories(destFile.getParent());
-
-                    try (FileInputStream in = new FileInputStream(pgpFile);
-                         java.io.OutputStream out = Files.newOutputStream(destFile)) {
-                        processor.process(in, out);
-                    }
-                    // (Optional) move or delete the processed file...
-                })
-                .get();
-    }
-
-    // 6. Make sure decrypted files are written safely
-    @Bean
-    @ServiceActivator(inputChannel = "fileWriterChannel")
-    public MessageHandler fileWriterHandler() {
-        FileWritingMessageHandler h = new FileWritingMessageHandler(outDir);
-        h.setExpectReply(false);
-        return h;
+    public ByteArrayInputStream download(String filename) throws Exception {
+        ChannelSftp sftp = connect();
+        sftp.cd(props.getRemoteDir());
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        sftp.get(filename, baos);
+        sftp.exit();
+        return new ByteArrayInputStream(baos.toByteArray());
     }
 }
 ```
 
 ---
 
-## 8 · Running Locally
+## 8. Scheduled Poller
 
-1. **Export / upload keys into Vault** (see Vault snippet above).
-2. Start Vault dev-server or connect to your real one; export `VAULT_TOKEN`.
-3. Set `SFTP_PW` env var or configure a key-pair auth.
-4. `mvn spring-boot:run`
-5. Drop an encrypted+signed file (`test.pgp`) into `/incoming` on the SFTP server.
-   *It will appear decrypted as `/opt/pgp-out/test.dec`.*
+```java
+// src/main/java/com/yourorg/pgpfileprocessor/FilePoller.java
+package com.yourorg.pgpfileprocessor;
 
----
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
 
-## 9 · CLI sanity-check (simulate Org A)
+import com.yourorg.pgpfileprocessor.config.SftpProperties;
+import com.yourorg.pgpfileprocessor.service.PgpFileProcessorService;
+import com.yourorg.pgpfileprocessor.service.SftpService;
 
-```bash
-# 1 Generate RSA 2048 keys for Org A & Org B
-gpg --quick-generate-key "Org A <a@demo>" rsa2048 sign 1y
-gpg --quick-generate-key "Org B <b@demo>" rsa2048 encrypt 1y
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
 
-# 2 Exchange public keys:
-gpg --armor --export "Org A <a@demo>" > their_public.asc
-gpg --armor --export "Org B <b@demo>" > our_public.asc
+@Slf4j
+@Component
+public class FilePoller {
 
-# 3 Org A encrypts+signs a payload
-echo "hello world" > payload.txt
-gpg --output payload.txt.pgp           \
-    --encrypt --sign                   \
-    --recipient "Org B <b@demo>"       \
-    --local-user "Org A <a@demo>"      \
-    -a payload.txt
+    private final SftpService sftpService;
+    private final PgpFileProcessorService pgpService;
+    private final SftpProperties props;
 
-# 4 Upload `payload.txt.pgp` to SFTP `/incoming`
+    public FilePoller(SftpService sftpService,
+                      PgpFileProcessorService pgpService,
+                      SftpProperties props) {
+        this.sftpService = sftpService;
+        this.pgpService = pgpService;
+        this.props = props;
+    }
+
+    @Scheduled(fixedDelayString = "${sftp.poll-interval-ms}")
+    public void pollAndProcess() {
+        try {
+            List<String> files = sftpService.listFiles();
+            for (String fname : files) {
+                log.info("Processing {}", fname);
+                byte[] decrypted = pgpService.decryptAndVerify(
+                    sftpService.download(fname)
+                );
+                Path out = Path.of(props.getLocalDownloadDir(), fname + ".dec");
+                Files.createDirectories(out.getParent());
+                Files.write(out, decrypted);
+                log.info("Written decrypted file to {}", out);
+                // optionally: move/delete remote file
+            }
+        } catch (Exception ex) {
+            log.error("Error in SFTP poll cycle", ex);
+        }
+    }
+}
 ```
 
-If the app logs **“Signature verified”** and you find `payload.txt.dec` with `hello world`, the pipeline works.
+---
+
+### 🔧 How to simulate Org A for testing
+
+```bash
+# 1. Generate keys for Org A and Org B
+gpg --batch --gen-key <<EOF
+%echo Generating orgA key
+Key-Type: RSA
+Key-Length: 2048
+Name-Real: OrgA
+Name-Email: a@example.com
+Expire-Date: 0
+%commit
+%echo Done
+EOF
+
+gpg --batch --gen-key <<EOF
+%echo Generating orgB key
+Key-Type: RSA
+Key-Length: 2048
+Name-Real: OrgB
+Name-Email: b@example.com
+Expire-Date: 0
+Passphrase: hunter2
+%commit
+%echo Done
+EOF
+
+# 2. Export ASCII-armored keys into Vault (or temp files)
+gpg --armor --export-secret-keys b@example.com > orgb_private.asc
+gpg --armor --export b@example.com > orgb_public.asc
+gpg --armor --export a@example.com > orga_public.asc
+
+# 3. Org A encrypts + signs a PDF
+gpg --output form.pdf.pgp \
+    --encrypt --recipient b@example.com \
+    --sign --local-user a@example.com \
+    form.pdf
+
+# 4. Verify+decrypt manually
+gpg --decrypt --verify form.pdf.pgp
+```
 
 ---
 
-## 🔒 Production Hardening Checklist
+**That’s it.** You now have a Spring Boot 2 app on Java 8 that:
 
-| Topic            | Action                                                                   |
-| ---------------- | ------------------------------------------------------------------------ |
-| **Vault auth**   | Switch to AppRole / Kubernetes Auth instead of static token              |
-| **Host key**     | Pin SFTP host key in `DefaultSftpSessionFactory#setKnownHosts`           |
-| **Logging**      | Never log passphrase or decrypted data                                   |
-| **Key rotation** | Keep Vault versions; reload beans on `@RefreshScope` or restart          |
-| **Alerts**       | Meter signature-failure & decryption errors to Prometheus / Grafana      |
-| **FIPS**         | Swap `bcprov-jdk15on` with **Bouncy Castle FIPS** if compliance requires |
+* Pulls files from SFTP
+* Verifies Org A’s signature
+* Decrypts with your private key
+* Loads secrets from Vault
+* Drops decrypted output locally
 
----
-
-### That’s the entire skeleton — copy it, fill in your real hostnames / Vault paths / credentials, and you can be in QA by lunch.  If you hit any compile or runtime snags, just holler with the error stack and we’ll tighten the bolts.
+Feel free to tweak, add unit/integration tests, or hook up any SFTP-to-JMS/batch pipeline.
