@@ -347,20 +347,23 @@ public class VaultKeyLoader {
 ```java
 package com.yourorg.pgpsftpprocessor.pgp;
 
+import com.yourorg.pgpsftpprocessor.vault.VaultKeyLoader;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.pgpainless.PGPainless;
 import org.pgpainless.decryption_verification.DecryptionStream;
-import org.pgpainless.decryption_verification.MessageMetadata;
-import org.pgpainless.key.collection.PGPKeyRingCollection;
+import org.pgpainless.decryption_verification.VerificationException;
+import org.pgpainless.key.collection.PGPPublicKeyRingCollection;
+import org.pgpainless.key.collection.PGPSecretKeyRingCollection;
 import org.pgpainless.key.protection.SecretKeyRingProtector;
+import org.pgpainless.util.Passphrase;
 import org.springframework.stereotype.Service;
-import com.yourorg.pgpsftpprocessor.vault.VaultKeyLoader;
 
 import java.io.*;
 
 @Service
 public class PgpProcessorService {
+
     private static final Log logger = LogFactory.getLog(PgpProcessorService.class);
 
     private final VaultKeyLoader vaultKeyLoader;
@@ -370,33 +373,48 @@ public class PgpProcessorService {
     }
 
     public void verifyAndDecrypt(File inputFile, File outputFile) throws Exception {
+        // Read keys from Vault
         String privateKey = vaultKeyLoader.getOurPrivateKey();
         String passphrase = vaultKeyLoader.getOurPassphrase();
         String publicKey = vaultKeyLoader.getTheirPublicKey();
 
-        PGPKeyRingCollection secretKeys = PGPainless.readKeyRing().secretKeyRingCollection(new ByteArrayInputStream(privateKey.getBytes("UTF-8")));
-        PGPKeyRingCollection publicKeys = PGPainless.readKeyRing().publicKeyRingCollection(new ByteArrayInputStream(publicKey.getBytes("UTF-8")));
-        SecretKeyRingProtector protector = SecretKeyRingProtector.unlockAllKeysWith(passphrase.toCharArray());
+        // Load keyrings
+        PGPSecretKeyRingCollection secretKeys = PGPainless.readKeyRing()
+                .secretKeyRingCollection(new ByteArrayInputStream(privateKey.getBytes("UTF-8")));
 
+        PGPPublicKeyRingCollection publicKeys = PGPainless.readKeyRing()
+                .publicKeyRingCollection(new ByteArrayInputStream(publicKey.getBytes("UTF-8")));
+
+        // Create key protector with passphrase
+        SecretKeyRingProtector protector = SecretKeyRingProtector
+                .unlockAllKeysWith(Passphrase.fromPassword(passphrase));
+
+        // Input & Output Streams
         try (InputStream in = new BufferedInputStream(new FileInputStream(inputFile));
              OutputStream out = new BufferedOutputStream(new FileOutputStream(outputFile))) {
-            DecryptionStream decryptor = PGPainless.decryptAndOrVerify()
+
+            // Create decryption stream
+            DecryptionStream decryptionStream = PGPainless.decryptAndOrVerify()
                     .onInputStream(in)
                     .decryptWith(protector, secretKeys)
                     .verifyWith(publicKeys)
-                    .ignoreMissingPublicKeys()
+                    .doNotFailOnMissingPublicKeys() // optional
                     .build();
-            MessageMetadata meta = decryptor.getMetadata();
-            logger.info("Signature verified: " + meta.isVerifiedSignature());
-            if (!meta.isVerifiedSignature()) {
-                throw new SecurityException("Signature could not be verified!");
-            }
+
+            // Pipe decrypted content to output
             byte[] buffer = new byte[8192];
             int len;
-            while ((len = decryptor.read(buffer)) != -1) {
+            while ((len = decryptionStream.read(buffer)) != -1) {
                 out.write(buffer, 0, len);
             }
-            decryptor.close();
+            decryptionStream.close();
+
+            // Check signature verification status
+            if (decryptionStream.getMetadata().getVerifiedSignatures().isEmpty()) {
+                throw new VerificationException("Signature could not be verified.");
+            }
+
+            logger.info("PGP signature verified and file decrypted successfully.");
         }
     }
 }
