@@ -8,6 +8,21 @@ Absolutely. Here’s a **complete, working Java 8 / Spring Boot 2.3.1 app scaffo
 * All dependencies and code are compatible with **Java 8** and **Spring Boot 2.3.1.RELEASE**.
 
 
+---
+
+## 📦 Root Package
+
+```
+com.yourorg.pgpsftpprocessor
+```
+
+This is your base package.
+
+---
+
+## 🗂 Full Directory Layout
+
+```
 com.yourorg.pgpsftpprocessor/
 ├── PgpSftpProcessorApplication.java       <-- Main class
 
@@ -37,6 +52,23 @@ com.yourorg.pgpsftpprocessor/
 
 └── exception/                             <-- (Optional) Custom exceptions
     └── SignatureVerificationException.java
+```
+
+---
+
+## 📘 Package Roles
+
+| Package      | Role                                                              |
+| ------------ | ----------------------------------------------------------------- |
+| `config`     | Spring configurations (Vault, SFTP, etc.)                         |
+| `sftp`       | All logic for SFTP connections, file listing, downloading         |
+| `pgp`        | PGP decryption, verification, stream handling                     |
+| `vault`      | Loads ASCII-armored key data + passphrase from Vault              |
+| `scheduling` | Scheduled tasks (polling SFTP at intervals)                       |
+| `controller` | Optional REST endpoint to upload and test manually                |
+| `model`      | File processing results, file metadata, audit info (if needed)    |
+| `exception`  | Throw custom checked/unchecked exceptions like Signature failures |
+| `util`       | File ops, validation helpers, etc.                                |
 
 
 ---
