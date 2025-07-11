@@ -352,11 +352,12 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.pgpainless.PGPainless;
 import org.pgpainless.decryption_verification.DecryptionStream;
-import org.pgpainless.decryption_verification.VerificationException;
-import org.pgpainless.key.collection.PGPPublicKeyRingCollection;
-import org.pgpainless.key.collection.PGPSecretKeyRingCollection;
+import org.pgpainless.decryption_verification.OpenPgpMetadata;
+import org.pgpainless.key.collection.KeyRingUtils;
 import org.pgpainless.key.protection.SecretKeyRingProtector;
 import org.pgpainless.util.Passphrase;
+import org.bouncycastle.openpgp.PGPPublicKeyRing;
+import org.bouncycastle.openpgp.PGPSecretKeyRing;
 import org.springframework.stereotype.Service;
 
 import java.io.*;
@@ -373,48 +374,40 @@ public class PgpProcessorService {
     }
 
     public void verifyAndDecrypt(File inputFile, File outputFile) throws Exception {
-        // Read keys from Vault
         String privateKey = vaultKeyLoader.getOurPrivateKey();
         String passphrase = vaultKeyLoader.getOurPassphrase();
         String publicKey = vaultKeyLoader.getTheirPublicKey();
 
-        // Load keyrings
-        PGPSecretKeyRingCollection secretKeys = PGPainless.readKeyRing()
-                .secretKeyRingCollection(new ByteArrayInputStream(privateKey.getBytes("UTF-8")));
+        // Load single key rings (Java 8 + PGPainless 1.5.5)
+        PGPSecretKeyRing secretKey = PGPainless.readKeyRing().secretKeyRing(new ByteArrayInputStream(privateKey.getBytes("UTF-8")));
+        PGPPublicKeyRing publicKeyRing = PGPainless.readKeyRing().publicKeyRing(new ByteArrayInputStream(publicKey.getBytes("UTF-8")));
+        SecretKeyRingProtector protector = SecretKeyRingProtector.unlockAllKeysWith(Passphrase.fromPassword(passphrase));
 
-        PGPPublicKeyRingCollection publicKeys = PGPainless.readKeyRing()
-                .publicKeyRingCollection(new ByteArrayInputStream(publicKey.getBytes("UTF-8")));
-
-        // Create key protector with passphrase
-        SecretKeyRingProtector protector = SecretKeyRingProtector
-                .unlockAllKeysWith(Passphrase.fromPassword(passphrase));
-
-        // Input & Output Streams
-        try (InputStream in = new BufferedInputStream(new FileInputStream(inputFile));
-             OutputStream out = new BufferedOutputStream(new FileOutputStream(outputFile))) {
-
-            // Create decryption stream
+        try (
+                InputStream inputStream = new BufferedInputStream(new FileInputStream(inputFile));
+                OutputStream outputStream = new BufferedOutputStream(new FileOutputStream(outputFile))
+        ) {
             DecryptionStream decryptionStream = PGPainless.decryptAndOrVerify()
-                    .onInputStream(in)
-                    .decryptWith(protector, secretKeys)
-                    .verifyWith(publicKeys)
-                    .doNotFailOnMissingPublicKeys() // optional
+                    .onInputStream(inputStream)
+                    .decryptWith(protector, secretKey)
+                    .verifyWith(publicKeyRing)
                     .build();
 
-            // Pipe decrypted content to output
+            // Pipe output
             byte[] buffer = new byte[8192];
             int len;
             while ((len = decryptionStream.read(buffer)) != -1) {
-                out.write(buffer, 0, len);
+                outputStream.write(buffer, 0, len);
             }
+
+            // Check verification result
+            OpenPgpMetadata metadata = decryptionStream.getMetadata();
+            if (!metadata.isVerifiedSignature()) {
+                throw new SecurityException("PGP Signature verification failed.");
+            }
+
+            logger.info("Signature verified. File decrypted successfully.");
             decryptionStream.close();
-
-            // Check signature verification status
-            if (decryptionStream.getMetadata().getVerifiedSignatures().isEmpty()) {
-                throw new VerificationException("Signature could not be verified.");
-            }
-
-            logger.info("PGP signature verified and file decrypted successfully.");
         }
     }
 }
