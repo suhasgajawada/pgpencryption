@@ -7,6 +7,38 @@ Absolutely. Here’s a **complete, working Java 8 / Spring Boot 2.3.1 app scaffo
 * Logs with Apache Commons Logging,
 * All dependencies and code are compatible with **Java 8** and **Spring Boot 2.3.1.RELEASE**.
 
+
+com.yourorg.pgpsftpprocessor/
+├── PgpSftpProcessorApplication.java       <-- Main class
+
+├── config/                                <-- External integrations, configs
+│   └── VaultConfig.java (optional if needed)
+
+├── sftp/                                  <-- Handles SFTP connection and downloads
+│   └── SftpService.java
+
+├── pgp/                                   <-- Handles PGP decryption + signature verification
+│   └── PgpProcessorService.java
+
+├── vault/                                 <-- Handles secure key loading from Vault
+│   └── VaultKeyLoader.java
+
+├── scheduling/                            <-- Scheduled polling logic
+│   └── SftpPollScheduler.java
+
+├── model/                                 <-- (Optional) DTOs, file metadata, etc
+│   └── DecryptionResult.java (optional)
+
+├── controller/                            <-- (Optional) REST endpoints for testing or manual upload
+│   └── FileUploadController.java
+
+├── util/                                  <-- (Optional) Helper methods, constants
+│   └── FileUtil.java
+
+└── exception/                             <-- (Optional) Custom exceptions
+    └── SignatureVerificationException.java
+
+
 ---
 
 ## 1. `pom.xml`
