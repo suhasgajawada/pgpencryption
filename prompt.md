@@ -33,7 +33,6 @@ Build a Java 8 Spring Boot 2.3.1 application called `pdf-journey-processor`. It 
 8. Structure the code with clean packages: `config`, `model`, `service`, `util`.
 9. Add a `RetryUtils` class to help with 3 retry attempts for downstream call.
 
-Output all files in Markdown, as if writing a complete README example.
 ```
 
 ---
