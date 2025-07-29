@@ -1,28 +1,45 @@
-Here’s a powerful and precise GitHub Copilot prompt you can paste into a new file (e.g., `README.md` or just start typing it in your `App.java`):
+Here’s your **GitHub Copilot prompt** to regenerate the exact project setup from scratch, with all the right expectations:
 
 ---
 
-### 🧠 GitHub Copilot Prompt (Java + Spring Boot PDF Processor)
+### ✅ Copilot Prompt (Paste in VSCode or Copilot Chat)
 
-```java
-// Build a Spring Boot 2.3.1.RELEASE application (Java 8) that:
-// 1. Every 15 minutes, reads all PDF files from a configured directory
-// 2. Extracts specific, configurable fields (like "Customer Name", "Account Number", etc.) from each PDF
-// 3. Constructs a JSON object from these fields
-// 4. Sends the JSON to a configured downstream REST endpoint using RestTemplate
-// 
-// Requirements:
-// - All configurable properties like schedule interval, field names, file path, and downstream URL should be in application.yaml
-// - Use Apache PDFBox for PDF text extraction
-// - Use Apache Commons Logging (no SLF4J or Logback directly)
-// - Do not use Lombok
-// - Use standard @Service, @Controller, @Configuration components
-// - Include a REST controller with a `/trigger` endpoint to manually invoke the processing job
-// - Provide meaningful logging using Apache Commons Logging
-// - Ignore .pdf files that fail to parse, but log them
-// - Use `@Scheduled(cron = "...")` for 15 min polling
-// - Directory should be `src/main/resources/pdf`
-// - No security, no database, no external dependencies beyond Spring Boot Starter, PDFBox, Commons Logging
-//
-// Start by writing the pom.xml with correct dependencies and Java 8 setup.
+```txt
+Build a Java 8 Spring Boot 2.3.1 application called `pdf-journey-processor`. It should:
+
+1. Use a `@Scheduled` cron job that runs every 15 minutes (configurable in `application.yaml`).
+2. Load multiple "journeys" from `application.yaml`. Each journey represents a country and includes:
+    - `sourcePath`: Path to pick up `.pdf` files
+    - `processedPath`: Path to move files after success
+    - `failedPath`: Path to move files after failure
+    - `filenetUrl`: Endpoint to upload the file
+    - `downstreamUrl`: Endpoint to send JSON data
+    - `filenetMeta`: Additional metadata (documentType, department)
+    - `jsonFields`: A map of JSON keys and PDF field markers to extract text
+3. For each journey:
+    - Process all `.pdf` files in its source path.
+    - First upload the file to `filenetUrl` (simulate this with a dummy POST).
+    - If upload succeeds, extract PDF text (simulate with `Files.readAllBytes`) and parse values based on markers in `jsonFields`.
+    - Convert extracted values to JSON.
+    - POST the JSON to the `downstreamUrl`.
+    - If both steps succeed, move file to `processedPath`.
+    - If file upload fails, leave the file in `sourcePath`.
+    - If JSON extraction or sending fails, move to `failedPath`.
+    - Retry downstream JSON send 3 times before failing.
+4. Parallelize processing of journeys using `@Async` with a thread pool.
+5. Use `RestTemplate` for HTTP calls.
+6. Use Apache Commons Logging (`LogFactory.getLog`) instead of SLF4J or Lombok.
+7. Avoid Lombok. Use plain Java beans.
+8. Structure the code with clean packages: `config`, `model`, `service`, `util`.
+9. Add a `RetryUtils` class to help with 3 retry attempts for downstream call.
+
+Output all files in Markdown, as if writing a complete README example.
 ```
+
+---
+
+This prompt is **stateless and reproducible** — it’ll let Copilot (or GPT-4/ChatGPT+VSCode) regenerate the entire project with correct logic, packages, and parallel handling. Use it when:
+
+* Starting over
+* Giving instructions to another developer
+* Debugging by regenerating broken files
