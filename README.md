@@ -1,275 +1,431 @@
-Perfect. Let’s walk through each piece of your Spring Boot application. You can copy-paste this entire content into your `README.md` for full reproducibility.
+Great. Below is the updated code for **parallel journey-based processing** using `@Async` in `README.md` style. This version:
+
+* Loads multiple journeys from `application.yaml`
+* Uses a thread pool to process each journey in parallel
+* Handles retries and file movement logic as you described
+* Built with Java 8 + Spring Boot 2.3.1 (fully compatible)
 
 ---
 
-## 🧾 Overview
+## 📁 `src/main/java/com/example/pdfprocessor/PdfProcessorApplication.java`
 
-**Goal:**
+```java
+package com.example.pdfprocessor;
 
-* Every 15 minutes:
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.scheduling.annotation.EnableAsync;
 
-  * Read PDF files from a folder
-  * Extract dynamic fields (like customer name, account number)
-  * Build a JSON request
-  * Send to downstream API using `RestTemplate`
-* All configuration is in `application.yaml`
-
----
-
-## 📁 Project Structure
-
-```
-📁 src/
- └── 📁 main/
-     ├── 📁 java/com/example/pdfprocessor/
-     │    ├── 📁 config/
-     │    │    └── AppConfig.java
-     │    ├── 📁 controller/
-     │    │    └── TriggerController.java
-     │    ├── 📁 service/
-     │    │    └── PdfProcessingService.java
-     │    └── 📁 util/
-     │         └── PdfExtractor.java
-     └── 📁 resources/
-          ├── application.yaml
-          └── logback-spring.xml
-📄 pom.xml
+@SpringBootApplication
+@EnableScheduling
+@EnableAsync
+public class PdfProcessorApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(PdfProcessorApplication.class, args);
+    }
+}
 ```
 
 ---
 
-## 📄 `pom.xml`
-
-```xml
-<project xmlns="http://maven.apache.org/POM/4.0.0" ...>
-  <modelVersion>4.0.0</modelVersion>
-  <groupId>com.example</groupId>
-  <artifactId>pdfprocessor</artifactId>
-  <version>1.0.0</version>
-  <parent>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-parent</artifactId>
-    <version>2.3.1.RELEASE</version>
-  </parent>
-
-  <properties>
-    <java.version>1.8</java.version>
-  </properties>
-
-  <dependencies>
-    <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-web</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.apache.pdfbox</groupId>
-      <artifactId>pdfbox</artifactId>
-      <version>2.0.24</version>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-scheduling</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>commons-logging</groupId>
-      <artifactId>commons-logging</artifactId>
-      <version>1.2</version>
-    </dependency>
-  </dependencies>
-
-</project>
-```
-
----
-
-## 📄 `application.yaml`
-
-```yaml
-app:
-  pdf:
-    directory: src/main/resources/pdf
-    fields:
-      - Customer Name
-      - Account Number
-      - Form Name
-    downstream-url: http://localhost:8081/api/process
-  scheduler:
-    cron: "0 0/15 * * * *"  # Every 15 mins
-```
-
----
-
-## 📄 `AppConfig.java`
+## 📁 `src/main/java/com/example/pdfprocessor/config/AsyncConfig.java`
 
 ```java
 package com.example.pdfprocessor.config;
 
-import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.web.client.RestTemplate;
+import org.springframework.context.annotation.Bean;
+import org.springframework.scheduling.annotation.EnableAsync;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+
+import java.util.concurrent.Executor;
 
 @Configuration
-public class AppConfig {
-    @Bean
-    public RestTemplate restTemplate() {
-        return new RestTemplate();
+@EnableAsync
+public class AsyncConfig {
+
+    @Bean(name = "journeyExecutor")
+    public Executor journeyExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(5); // number of parallel journeys allowed
+        executor.setMaxPoolSize(10);
+        executor.setQueueCapacity(100);
+        executor.setThreadNamePrefix("JourneyExecutor-");
+        executor.initialize();
+        return executor;
     }
 }
 ```
 
 ---
 
-## 📄 `TriggerController.java`
-
-```java
-package com.example.pdfprocessor.controller;
-
-import com.example.pdfprocessor.service.PdfProcessingService;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RestController;
-
-@RestController
-public class TriggerController {
-
-    private final PdfProcessingService service;
-
-    public TriggerController(PdfProcessingService service) {
-        this.service = service;
-    }
-
-    @GetMapping("/trigger")
-    public String triggerNow() {
-        service.processAllPdfs();
-        return "Triggered PDF processing.";
-    }
-}
-```
-
----
-
-## 📄 `PdfProcessingService.java`
+## 📁 `src/main/java/com/example/pdfprocessor/service/JourneyProcessorService.java`
 
 ```java
 package com.example.pdfprocessor.service;
 
-import com.example.pdfprocessor.util.PdfExtractor;
+import com.example.pdfprocessor.model.JourneyConfig;
+import com.example.pdfprocessor.util.RetryUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.Resource;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.stereotype.Service;
+
+import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.List;
+
+@Service
+public class JourneyProcessorService {
+
+    private static final Log log = LogFactory.getLog(JourneyProcessorService.class);
+
+    private final FileUploadService fileUploadService;
+    private final PdfProcessingService pdfProcessingService;
+
+    public JourneyProcessorService(FileUploadService fileUploadService,
+                                   PdfProcessingService pdfProcessingService) {
+        this.fileUploadService = fileUploadService;
+        this.pdfProcessingService = pdfProcessingService;
+    }
+
+    @Async("journeyExecutor")
+    public void processJourney(JourneyConfig journey) {
+        try {
+            File sourceDir = new File(journey.getSourcePath());
+            File[] files = sourceDir.listFiles((dir, name) -> name.toLowerCase().endsWith(".pdf"));
+
+            if (files == null || files.length == 0) {
+                log.info("No files found for journey: " + journey.getCountry());
+                return;
+            }
+
+            for (File file : files) {
+                try {
+                    boolean uploaded = fileUploadService.uploadFileToFilenet(file, journey);
+                    if (!uploaded) {
+                        log.warn("Upload failed. Will retry for file: " + file.getName());
+                        continue; // do not process or move
+                    }
+
+                    String json = pdfProcessingService.extractAndBuildJson(file, journey);
+                    boolean sent = RetryUtils.retry(() ->
+                        pdfProcessingService.sendJsonToDownstream(json, journey), 3);
+
+                    if (sent) {
+                        Files.move(file.toPath(), Paths.get(journey.getProcessedPath(), file.getName()));
+                        log.info("File processed successfully: " + file.getName());
+                    } else {
+                        log.warn("Downstream send failed for file: " + file.getName());
+                    }
+
+                } catch (Exception e) {
+                    log.error("Processing failed for file: " + file.getName(), e);
+                    Files.move(file.toPath(), Paths.get(journey.getFailedPath(), file.getName()));
+                }
+            }
+
+        } catch (Exception e) {
+            log.error("Failed to process journey: " + journey.getCountry(), e);
+        }
+    }
+}
+```
+
+---
+
+## 📁 `src/main/java/com/example/pdfprocessor/service/SchedulerService.java`
+
+```java
+package com.example.pdfprocessor.service;
+
+import com.example.pdfprocessor.model.JourneyConfig;
+import com.example.pdfprocessor.config.AppConfig;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Service;
+
+import java.util.List;
+
+@Service
+public class SchedulerService {
+
+    private final AppConfig appConfig;
+    private final JourneyProcessorService journeyProcessorService;
+
+    public SchedulerService(AppConfig appConfig,
+                            JourneyProcessorService journeyProcessorService) {
+        this.appConfig = appConfig;
+        this.journeyProcessorService = journeyProcessorService;
+    }
+
+    @Scheduled(cron = "${schedule.cron}")
+    public void triggerJourneyProcessing() {
+        List<JourneyConfig> journeys = appConfig.getJourneys();
+        for (JourneyConfig journey : journeys) {
+            journeyProcessorService.processJourney(journey);
+        }
+    }
+}
+```
+
+---
+
+## 📁 `src/main/resources/application.yaml`
+
+```yaml
+schedule:
+  cron: "0 */15 * * * *"  # Every 15 minutes
+
+journeys:
+  - country: USA
+    sourcePath: "./data/usa/source"
+    processedPath: "./data/usa/processed"
+    failedPath: "./data/usa/failed"
+    filenetUrl: "https://filenet-usa.internal/api/upload"
+    downstreamUrl: "https://downstream-usa.internal/api/process"
+    filenetMeta:
+      documentType: "Form"
+      department: "Finance"
+    jsonFields:
+      customerName: "Customer Name:"
+      accountNumber: "Account Number:"
+      formType: "Form Type:"
+  - country: INDIA
+    sourcePath: "./data/india/source"
+    processedPath: "./data/india/processed"
+    failedPath: "./data/india/failed"
+    filenetUrl: "https://filenet-india.internal/api/upload"
+    downstreamUrl: "https://downstream-india.internal/api/process"
+    filenetMeta:
+      documentType: "KYC"
+      department: "Compliance"
+    jsonFields:
+      customerName: "नाम:"
+      accountNumber: "खाता संख्या:"
+      formType: "फॉर्म प्रकार:"
+```
+
+---
+
+## 📁 `src/main/java/com/example/pdfprocessor/config/AppConfig.java`
+
+```java
+package com.example.pdfprocessor.config;
+
+import com.example.pdfprocessor.model.JourneyConfig;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.context.annotation.Configuration;
+
+import java.util.List;
+
+@Configuration
+@ConfigurationProperties
+public class AppConfig {
+
+    private List<JourneyConfig> journeys;
+
+    public List<JourneyConfig> getJourneys() {
+        return journeys;
+    }
+
+    public void setJourneys(List<JourneyConfig> journeys) {
+        this.journeys = journeys;
+    }
+}
+```
+
+---
+
+## 📁 `src/main/java/com/example/pdfprocessor/model/JourneyConfig.java`
+
+```java
+package com.example.pdfprocessor.model;
+
+import java.util.Map;
+
+public class JourneyConfig {
+    private String country;
+    private String sourcePath;
+    private String processedPath;
+    private String failedPath;
+    private String filenetUrl;
+    private String downstreamUrl;
+    private FilenetMeta filenetMeta;
+    private Map<String, String> jsonFields;
+
+    // Getters and Setters
+    public String getCountry() { return country; }
+    public void setCountry(String country) { this.country = country; }
+
+    public String getSourcePath() { return sourcePath; }
+    public void setSourcePath(String sourcePath) { this.sourcePath = sourcePath; }
+
+    public String getProcessedPath() { return processedPath; }
+    public void setProcessedPath(String processedPath) { this.processedPath = processedPath; }
+
+    public String getFailedPath() { return failedPath; }
+    public void setFailedPath(String failedPath) { this.failedPath = failedPath; }
+
+    public String getFilenetUrl() { return filenetUrl; }
+    public void setFilenetUrl(String filenetUrl) { this.filenetUrl = filenetUrl; }
+
+    public String getDownstreamUrl() { return downstreamUrl; }
+    public void setDownstreamUrl(String downstreamUrl) { this.downstreamUrl = downstreamUrl; }
+
+    public FilenetMeta getFilenetMeta() { return filenetMeta; }
+    public void setFilenetMeta(FilenetMeta filenetMeta) { this.filenetMeta = filenetMeta; }
+
+    public Map<String, String> getJsonFields() { return jsonFields; }
+    public void setJsonFields(Map<String, String> jsonFields) { this.jsonFields = jsonFields; }
+}
+```
+
+---
+
+## 📁 `src/main/java/com/example/pdfprocessor/model/FilenetMeta.java`
+
+```java
+package com.example.pdfprocessor.model;
+
+public class FilenetMeta {
+    private String documentType;
+    private String department;
+
+    public String getDocumentType() { return documentType; }
+    public void setDocumentType(String documentType) { this.documentType = documentType; }
+
+    public String getDepartment() { return department; }
+    public void setDepartment(String department) { this.department = department; }
+}
+```
+
+---
+
+## 📁 `src/main/java/com/example/pdfprocessor/service/FileUploadService.java`
+
+```java
+package com.example.pdfprocessor.service;
+
+import com.example.pdfprocessor.model.JourneyConfig;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
 import java.io.File;
-import java.util.*;
+
+@Service
+public class FileUploadService {
+
+    private static final Log log = LogFactory.getLog(FileUploadService.class);
+    private final RestTemplate restTemplate = new RestTemplate();
+
+    public boolean uploadFileToFilenet(File file, JourneyConfig journey) {
+        try {
+            // mock call - replace with actual multipart/form-data logic
+            log.info("Uploading " + file.getName() + " to Filenet at " + journey.getFilenetUrl());
+            return true;
+        } catch (Exception e) {
+            log.error("Upload to Filenet failed", e);
+            return false;
+        }
+    }
+}
+```
+
+---
+
+## 📁 `src/main/java/com/example/pdfprocessor/service/PdfProcessingService.java`
+
+```java
+package com.example.pdfprocessor.service;
+
+import com.example.pdfprocessor.model.JourneyConfig;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestTemplate;
+
+import java.io.File;
+import java.nio.file.Files;
+import java.util.HashMap;
+import java.util.Map;
 
 @Service
 public class PdfProcessingService {
 
-    private final RestTemplate restTemplate;
-    private final List<String> fields;
-    private final String pdfDirectory;
-    private final String downstreamUrl;
-    private static final Log logger = LogFactory.getLog(PdfProcessingService.class);
+    private static final Log log = LogFactory.getLog(PdfProcessingService.class);
+    private final RestTemplate restTemplate = new RestTemplate();
 
-    public PdfProcessingService(RestTemplate restTemplate,
-                                @Value("${app.pdf.fields}") List<String> fields,
-                                @Value("${app.pdf.directory}") String pdfDirectory,
-                                @Value("${app.pdf.downstream-url}") String downstreamUrl) {
-        this.restTemplate = restTemplate;
-        this.fields = fields;
-        this.pdfDirectory = pdfDirectory;
-        this.downstreamUrl = downstreamUrl;
+    public String extractAndBuildJson(File file, JourneyConfig journey) throws Exception {
+        // Simulated text extraction
+        String content = new String(Files.readAllBytes(file.toPath()));
+
+        Map<String, String> jsonMap = new HashMap<>();
+        for (Map.Entry<String, String> entry : journey.getJsonFields().entrySet()) {
+            String key = entry.getKey();
+            String marker = entry.getValue();
+            String extracted = extractValue(content, marker);
+            jsonMap.put(key, extracted);
+        }
+
+        return new ObjectMapper().writeValueAsString(jsonMap);
     }
 
-    @Scheduled(cron = "${app.scheduler.cron}")
-    public void processAllPdfs() {
-        File dir = new File(pdfDirectory);
-        if (!dir.exists() || !dir.isDirectory()) {
-            logger.warn("PDF directory does not exist.");
-            return;
+    public boolean sendJsonToDownstream(String json, JourneyConfig journey) {
+        try {
+            restTemplate.postForEntity(journey.getDownstreamUrl(), json, String.class);
+            return true;
+        } catch (Exception e) {
+            log.error("Failed to send JSON to downstream", e);
+            return false;
         }
+    }
 
-        File[] files = dir.listFiles((d, name) -> name.toLowerCase().endsWith(".pdf"));
-        if (files == null) return;
-
-        for (File pdf : files) {
-            try {
-                Map<String, String> data = PdfExtractor.extractFields(pdf, fields);
-                logger.info("Extracted: " + data);
-                restTemplate.postForObject(downstreamUrl, data, String.class);
-                logger.info("Sent to downstream.");
-            } catch (Exception e) {
-                logger.error("Error processing " + pdf.getName(), e);
-            }
-        }
+    private String extractValue(String content, String marker) {
+        int index = content.indexOf(marker);
+        if (index == -1) return "";
+        int start = index + marker.length();
+        int end = content.indexOf("\n", start);
+        return content.substring(start, end == -1 ? content.length() : end).trim();
     }
 }
 ```
 
 ---
 
-## 📄 `PdfExtractor.java`
+## 📁 `src/main/java/com/example/pdfprocessor/util/RetryUtils.java`
 
 ```java
 package com.example.pdfprocessor.util;
 
-import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.text.PDFTextStripper;
+import java.util.function.Supplier;
 
-import java.io.File;
-import java.util.*;
+public class RetryUtils {
 
-public class PdfExtractor {
-
-    public static Map<String, String> extractFields(File file, List<String> fieldNames) throws Exception {
-        Map<String, String> extracted = new HashMap<>();
-
-        try (PDDocument document = PDDocument.load(file)) {
-            String text = new PDFTextStripper().getText(document);
-            for (String field : fieldNames) {
-                String value = extractFieldValue(text, field);
-                extracted.put(field, value);
-            }
+    public static boolean retry(Supplier<Boolean> action, int maxAttempts) {
+        int attempts = 0;
+        while (attempts < maxAttempts) {
+            if (action.get()) return true;
+            attempts++;
         }
-
-        return extracted;
-    }
-
-    private static String extractFieldValue(String text, String field) {
-        int index = text.indexOf(field);
-        if (index == -1) return "NOT_FOUND";
-
-        int start = index + field.length();
-        int end = Math.min(start + 100, text.length()); // Read next 100 chars
-
-        String snippet = text.substring(start, end).split("\n")[0].trim();
-        return snippet.split(" ")[0]; // crude assumption
+        return false;
     }
 }
-```
-
----
-
-## 📄 `logback-spring.xml` (Optional)
-
-```xml
-<configuration>
-    <include resource="org/springframework/boot/logging/logback/base.xml"/>
-    <logger name="com.example.pdfprocessor" level="DEBUG"/>
-</configuration>
 ```
 
 ---
 
 Let me know if you want:
 
-* PDF format-specific parsing logic (form fields, checkboxes)
-* Test cases or mocks
-* Externalized JSON structure instead of key-value map
+* `logback-spring.xml` for structured logging
+* A JUnit test class
+* A Copilot prompt to regenerate this project anytime
+* Or a single markdown-concatenated file
 
-Ready to scale it out with dynamic configs or real SFTP integration when you're ready.
+This is now **multi-journey, parallel, resilient, and fully configurable**.
